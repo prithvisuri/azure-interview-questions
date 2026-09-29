@@ -1,0 +1,187 @@
+# Interview Questions: Azure, Azure DevOps and Kubernetes (6-8 Years)
+
+Each answer is written the way a strong candidate would actually say it out loud. Each question also has a short follow-up you can use to check whether the experience is real.
+
+---
+
+## Tier 1: Foundation
+
+**Q1. You inherit an Azure environment with 40 subscriptions and no structure. How do you organize it?**
+
+I'd start by drawing a management group tree, and I'd base it on how workloads are run, not on the org chart. Platform things like networking, identity and management go in one branch. Workloads go in another, split into production and non-production. Then I'd put Azure Policy and RBAC at the management group level so every subscription inherits them. I'd also enforce tags like owner, cost center and environment through policy, so nothing is left unowned. For new subscriptions, I'd automate creation with code so nobody builds them by hand. I'd roll out policies in audit mode first, because turning on a deny policy in a live environment breaks things.
+
+*Follow-up:* What broke the last time you applied a deny policy?
+
+**Q2. How do you let an app talk to Azure SQL and Key Vault without storing any secrets?**
+
+I use managed identities. The app gets an identity from Azure, and I give that identity just the permissions it needs. For Key Vault, I use RBAC instead of the old access policies. For SQL, I use Entra ID login instead of passwords. I also put both behind private endpoints and turn off public access. On AKS, I use Workload Identity, which links a Kubernetes service account to an Azure identity. The older pod identity approach is deprecated, so I wouldn't use it for anything new.
+
+*Follow-up:* The app can't resolve the private endpoint from on-prem. Why?
+
+**Q3. How do you choose between Load Balancer, Application Gateway, Front Door and Traffic Manager?**
+
+I think of it in layers. Load Balancer works at layer 4, inside one region. Application Gateway is layer 7 inside one region, and it has a WAF. Front Door is global layer 7, with WAF, caching and fast failover. Traffic Manager only does DNS-based routing, so it can't inspect traffic. For a global web app, I'd usually put Front Door at the edge and Application Gateway or an ingress controller in each region. Then I'd lock the origin down so people can't skip Front Door, either with Private Link or by checking the Front Door ID header.
+
+*Follow-up:* How do you stop users from hitting the origin directly?
+
+**Q4. What's your approach to Infrastructure as Code on Azure?**
+
+I've used both Bicep and Terraform. Bicep is nice for Azure-only work because new features show up quickly and there's no state file to manage. Terraform makes more sense when you have multiple clouds or lots of third-party providers. Whichever I use, I keep state in a remote backend with locking, split the code into small modules, and run a plan or what-if on every pull request. I also add policy checks like Checkov, and I schedule drift detection so manual changes get noticed.
+
+*Follow-up:* Someone changes a resource in the portal. What happens next?
+
+---
+
+## Tier 2: Intermediate
+
+**Q5. How would you design pipelines for a microservices monorepo without rebuilding everything on every commit?**
+
+I'd give each service its own pipeline and use path filters, so a change in one folder only triggers that service. The real logic lives in shared templates in a central repo, so every team builds and deploys the same way. I follow "build once, deploy many," which means one artifact gets promoted through dev, test and prod instead of being rebuilt each time. I also use caching and run independent jobs in parallel to keep builds fast.
+
+*Follow-up:* How do you stop a team from removing the security scan from their own YAML?
+
+**Q6. How do your pipelines log in to Azure?**
+
+I use service connections with workload identity federation, which is OIDC based. That means there's no client secret to store or rotate, and no surprise outage when a secret expires. I create one connection per environment, scope it to a resource group where I can, and restrict which pipelines are allowed to use it. Production connections also get approvals and checks.
+
+*Follow-up:* What if the pipeline identity needs to assign roles?
+
+**Q7. Trunk-based or GitFlow? What would you use for 60 engineers?**
+
+Trunk-based, almost every time. Branches live for a day or two, and everything merges into main behind branch policies like required reviewers and a passing build. Unfinished work stays hidden behind feature flags, so shipping code and turning on a feature are two separate decisions. I'd only add release branches if a compliance rule demanded them.
+
+*Follow-up:* How do you handle a hotfix in this model?
+
+**Q8. How do you manage secrets across pipelines and clusters?**
+
+Key Vault is the single source of truth. In AKS, I mount secrets with the Secrets Store CSI driver, or use External Secrets Operator, so secrets never sit in Git. I run secret scanning in pull requests and have a rotation plan. I also keep plain settings in App Configuration, so I'm not stuffing everything into the vault.
+
+*Follow-up:* A secret leaked into Git. What do you do first?
+
+**Q9. When do you use a Deployment, a StatefulSet and a DaemonSet?**
+
+Deployments are for stateless things like APIs, where any pod is as good as any other. I use StatefulSets when each pod needs a stable name and its own disk, like Kafka or Elasticsearch. DaemonSets are for things that must run on every node, like log shippers or monitoring agents. With StatefulSets, I know they roll updates one pod at a time, and that they need a headless service.
+
+*Follow-up:* A StatefulSet pod is stuck Terminating after a node died. What's the risk of force-deleting it?
+
+**Q10. A rollout is stuck. How do you handle it?**
+
+First I check `kubectl rollout status` and describe the new pods. The usual causes are a failing readiness probe, an image pull error, not enough CPU or memory in the cluster, or a PodDisruptionBudget blocking things. For image pull errors on AKS, I check that the kubelet identity has AcrPull on the registry. If production is hurting, I roll back first with `kubectl rollout undo` and find the root cause after. Longer term, I'd add automated rollback through progressive delivery.
+
+*Follow-up:* Tell me about a probe you misconfigured that caused an outage.
+
+**Q11. How do you set requests, limits and autoscaling for a production service?**
+
+I set requests from real usage data, from Prometheus or from VPA in recommendation mode, not from guesses. I'm careful with CPU limits, because they can throttle an app even when the node is idle. Memory limits are different, since going over means an OOM kill. For scaling, I use HPA on CPU for simple cases and KEDA for event-driven cases like queue length. I avoid letting HPA and VPA both act on CPU for the same workload, because they fight each other.
+
+*Follow-up:* HPA added pods but they're all Pending. Why?
+
+---
+
+## Tier 3: Advanced
+
+**Q12. Design a production AKS cluster. What decisions are hard to change later?**
+
+Networking is the big one. I'd pick Azure CNI Overlay or CNI with pod subnets and plan the IP ranges carefully, because running out of IPs is the classic AKS failure. I'd choose between a private cluster and API server VNet integration early. I'd control outbound traffic through Azure Firewall or a NAT Gateway. I'd also separate system and user node pools, spread them across availability zones, and connect the cluster to Entra ID for login and RBAC. Workload Identity, managed Prometheus and Grafana, and a sensible upgrade channel go in from day one.
+
+*Follow-up:* How did you size the IP space?
+
+**Q13. How do you secure a Kubernetes cluster end to end?**
+
+I think in layers. For images, I scan them, sign them, and only allow signed images to run through an admission policy. In the cluster, I use Pod Security Standards, run containers as non-root, and use read-only filesystems where possible. Default-deny network policies stop pods from talking to each other unless allowed. Humans get minimal RBAC and temporary admin access through PIM, not permanent cluster-admin. At runtime, Defender for Containers watches for odd behavior.
+
+*Follow-up:* A base image has a CVE and there's no fix yet. What do you do?
+
+**Q14. What's your ingress strategy on AKS, given the ingress-nginx retirement?**
+
+I'd stop building anything new on ingress-nginx, since the community project is being retired. I'd move toward the Gateway API, using something like Application Gateway for Containers or an Envoy or Istio based gateway. Gateway API is also a better model, because the platform team owns the Gateway and app teams own their own routes. I'd keep cert-manager for TLS. For migrating existing Ingress resources, I'd run the new gateway next to the old one and shift traffic slowly at DNS or Front Door.
+
+*Follow-up:* How do you migrate 200 Ingresses with custom annotations without downtime?
+
+**Q15. GitOps or push-based deployment from Azure Pipelines?**
+
+For Kubernetes, I prefer GitOps with Flux or Argo CD. The cluster pulls its config from Git, keeps fixing drift, and CI doesn't need cluster credentials. The pipeline builds and tests, then updates the image tag in a manifest repo, and the GitOps tool does the deploy. Push is fine for small setups or things that aren't Kubernetes, like a web app on App Service.
+
+*Follow-up:* How do you promote from staging to prod and roll back?
+
+**Q16. How do you do canary or blue-green releases?**
+
+I use Argo Rollouts or Flagger, with a gateway or mesh to split traffic. The rollout sends maybe 5% of traffic to the new version, checks error rate and latency, and moves on only if they look healthy. If they don't, it rolls back on its own. The database needs care too, so I use expand-and-contract migrations, meaning the old and new app versions both work with the schema at the same time.
+
+*Follow-up:* What metrics gate your canary, and how did you pick the thresholds?
+
+**Q17. How do you design observability for microservices on Azure?**
+
+I want metrics, logs and traces working together. I use Azure Monitor managed Prometheus and Grafana for metrics, OpenTelemetry with Application Insights for traces, and Log Analytics for logs. I control log costs by dropping noisy data and using the cheaper table tiers. For alerting, I prefer SLO burn-rate alerts over simple thresholds, because they page people only when users are really affected. Every alert should link to a runbook.
+
+*Follow-up:* Your Log Analytics bill tripled. How do you investigate?
+
+**Q18. How do you plan disaster recovery for a critical AKS workload?**
+
+I start with the RTO and RPO the business actually needs. Then I spread node pools across zones, use PodDisruptionBudgets and topology spread rules, and for critical apps run in two regions behind Front Door. The data layer needs real replication, like SQL failover groups or Cosmos DB multi-region. Backup tools alone aren't enough for that. I treat the cluster as rebuildable from IaC and GitOps. Most importantly, I test it with real failover drills.
+
+*Follow-up:* When did you last fail over, and what surprised you?
+
+**Q19. How do you handle Kubernetes upgrades and node patching safely?**
+
+I use auto-upgrade channels with maintenance windows, and roll changes through non-prod first. Before a minor version upgrade, I scan for deprecated APIs with a tool like Pluto. I also make sure PodDisruptionBudgets aren't so strict that they block node drains forever. Node image updates go through the node OS channel so patching happens regularly and not in a panic.
+
+*Follow-up:* An upgrade hangs on a PDB. Now what?
+
+---
+
+## Tier 4: Expert
+
+**Q20. Design a multi-tenant platform on AKS for 30 product teams.**
+
+I'd use a tiered model. Most teams get a namespace on a shared cluster, with quotas, LimitRanges, network policies and Entra group-based RBAC. Teams with stricter needs, like regulated data, get their own cluster. Onboarding is self-service through templates, so a team gets a namespace, pipeline and dashboards without filing a ticket. I'd also show each team its costs. I treat the platform like a product, with clear support expectations and regular feedback from the teams.
+
+*Follow-up:* One noisy team is starving the others. What's the structural fix?
+
+**Q21. Tell me about a production incident you led.**
+
+A good answer here is a story, so I'd listen for how they tell it. It should cover how it was detected, how they got the service back before hunting the root cause, and how they kept people informed. After that comes a blameless review with real fixes, like new alerts, automation or guardrails. "We told people to be more careful" is not a real fix.
+
+*Follow-up:* What did you get wrong during the incident?
+
+**Q22. A pod reaches a service in another namespace only sometimes. How do you debug it?**
+
+I go layer by layer. First I test from inside the pod with `kubectl exec` or a debug container. Then I check DNS, including the `ndots` setting, which can cause slow lookups. Next I look at the Service and its endpoints to see if some backends are unhealthy. Then I check network policies. After that come node-level problems like conntrack limits or SNAT port exhaustion. Finally I look at NSGs and the firewall. Intermittent failures often point to DNS timeouts, unhealthy backends or port exhaustion.
+
+*Follow-up:* What is SNAT port exhaustion, and how does it show up?
+
+**Q23. How do you build supply-chain security into delivery without slowing teams down?**
+
+I keep the checks fast and put them early. Pull requests get code and dependency scanning plus secret detection. The build creates an SBOM and signs the image, and the cluster only accepts signed images. When a team needs an exception, there's a simple written process. I also track things like build time and scan failure rates, to show that security isn't the bottleneck.
+
+*Follow-up:* Developers keep bypassing the gates. Tooling problem or culture problem?
+
+**Q24. How do you cut cloud costs without hurting reliability?**
+
+I start with right-sizing, using real usage data. Then I use spot nodes for work that can survive an eviction, and reservations or savings plans for the steady baseline. KEDA can scale idle services to zero, and dev environments can shut off at night. Tags, budgets and monthly reviews keep costs visible. I'm also honest about the trade-offs, like spot evictions or less spare capacity.
+
+*Follow-up:* Which change saved the most, and what risk did it add?
+
+**Q25. Where would you use AI in DevOps work, and where wouldn't you?**
+
+I'd use it for summarizing alerts and logs, drafting runbooks, helping review pull requests, and scaffolding IaC. A human always reviews the output. I wouldn't let it change production on its own. Any AI agent gets least-privilege access, and everything it does is logged. I'd also be careful about what data goes into it.
+
+*Follow-up:* An AI-written Terraform change passed review but broke networking. What would have caught it?
+
+**Q26. How do you handle people who resist a change you believe is right?**
+
+First I try to understand why they're resisting, because there's often a real concern I missed. Then I show the benefit in terms of their own pain, usually with a small pilot and real data. I make the right way the easy way with templates and good defaults. I only escalate after I've tried helping. And I stay open to being wrong, since sometimes the resistance is right.
+
+*Follow-up:* Tell me about a time you were persuaded you were wrong.
+
+---
+
+## Quick Guide for Interviewers
+
+**Good signs:** The candidate explains why they chose something, not just what it is. They mention real failures and what they learned. They name specific tools, commands and limits. They debug in a clear order, not by guessing. They own their mistakes.
+
+**Warning signs:** The answer is only a list of service names. The candidate relies on outdated things like kubenet, PodSecurityPolicy, pod identity, or secret-based service connections. They blame tools or teammates.
+
+**Suggested 90-minute plan:** Pick 2 questions from Tier 2, 2 from Tier 3 and 1-2 from Tier 4, and add Q21 or Q26 for the people side. Use the follow-ups freely. A candidate who can hold up under them has done the work.
+
+I can also turn this into a Word or PDF handout, or add a hands-on exercise like a broken AKS manifest to debug live.
