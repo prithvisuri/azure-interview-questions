@@ -1,0 +1,284 @@
+# Interview Question Bank: Azure, Azure DevOps and Kubernetes (6-8 Years of Experience)
+
+**How to use this:** Questions are grouped into four tiers. Even the "Foundation" tier assumes hands-on experience, so none of it is textbook recall. Each question has a **strong answer** (what senior depth sounds like) and a **probe** (a follow-up that separates real experience from rehearsed answers).
+
+---
+
+## Tier 1: Foundation (Applied Fundamentals)
+
+**Q1. You inherit an Azure environment with 40 subscriptions and no consistent structure. How do you organize it?**
+
+*Strong answer:*
+- Management group hierarchy aligned to the Azure Landing Zone model (platform vs. landing zones, prod vs. non-prod), not the org chart.
+- Azure Policy and RBAC assigned at the management group level and inherited downward.
+- Separate subscriptions for connectivity, identity, and management.
+- Consistent naming and tagging enforced by policy (owner, cost center, environment).
+- Subscription vending automated through IaC.
+
+*Probe:* "What broke when you applied a deny policy to existing resources?" Look for awareness of audit-first rollouts, remediation tasks, and exemptions.
+
+**Q2. Explain how you'd secure access from an application to Azure SQL and Key Vault without storing secrets.**
+
+*Strong answer:*
+- Managed identities (system- vs. user-assigned, and why user-assigned suits shared or pre-provisioned scenarios).
+- RBAC over access policies for Key Vault.
+- Entra ID authentication for SQL.
+- Private endpoints with private DNS zones, and public network access disabled.
+- For AKS, Workload Identity (federated credentials), not the deprecated pod identity.
+
+*Probe:* "The app can't resolve the private endpoint from on-prem. Why?" Expect DNS forwarding and conditional forwarders to Azure DNS or Private Resolver.
+
+**Q3. Compare Azure Load Balancer, Application Gateway, Front Door, and Traffic Manager. How do you choose?**
+
+*Strong answer:*
+- Layer 4 regional (Load Balancer) vs. Layer 7 regional with WAF (App Gateway) vs. global Layer 7 with CDN, WAF, and edge acceleration (Front Door) vs. DNS-based routing (Traffic Manager).
+- Real combinations, e.g. Front Door in front of regional App Gateways or AKS ingress, with origin lockdown via the `X-Azure-FDID` header or Private Link.
+
+*Probe:* "How do you stop users from bypassing Front Door and hitting the origin directly?"
+
+**Q4. Walk me through your Infrastructure as Code approach on Azure. Bicep, Terraform, or both, and why?**
+
+*Strong answer:*
+- A clear rationale (Bicep for day-zero API support and no state file; Terraform for multi-cloud and ecosystem).
+- Remote state with locking, modularization, and environment promotion.
+- `what-if` or `plan` in PR pipelines, drift detection, and policy-as-code checks (Checkov, PSRule).
+- Avoiding monolithic state files.
+
+*Probe:* "Someone changed a resource manually in the portal. What happens next?"
+
+---
+
+## Tier 2: Intermediate (Design and Operations)
+
+**Q5. Design a multi-stage Azure Pipelines YAML setup for a microservices monorepo. How do you avoid rebuilding everything on every commit?**
+
+*Strong answer:*
+- Path filters and per-service pipelines calling shared templates (`extends` templates and step/job templates in a central repo).
+- Template-enforced required steps (security scans) via `extends` plus checks.
+- Stages mapped to Environments with approvals and checks.
+- Artifact promotion (build once, deploy many) rather than rebuilding per environment.
+- Caching (`Cache@2`) and parallel jobs.
+
+*Probe:* "How do you stop a team from bypassing the security scan in their own YAML?" Look for `extends` templates with required-template checks.
+
+**Q6. How do you authenticate Azure Pipelines to Azure, and what has changed in best practice?**
+
+*Strong answer:*
+- Service connections using workload identity federation (OIDC), so there are no client secrets to rotate.
+- Least-privilege RBAC scoped to a resource group, one connection per environment, and restricted pipeline permissions on the connection.
+- Awareness of secret-expiry incidents as the motivation.
+
+*Probe:* "What if the service connection identity needs to assign roles?" Expect discussion of constrained role assignment via ABAC conditions.
+
+**Q7. Describe your branching and release strategy. Trunk-based or GitFlow, and what would you change on a team of 60 engineers?**
+
+*Strong answer:*
+- Trunk-based development with short-lived branches, feature flags, and branch policies (required reviewers, build validation, comment resolution).
+- Release branches only where compliance demands them.
+- Deployment (shipping code) decoupled from release (exposing features).
+
+*Probe:* "How do you handle a hotfix under this model?"
+
+**Q8. How do you handle secrets and configuration across pipelines and clusters?**
+
+*Strong answer:*
+- Key Vault as the source of truth.
+- Secrets Store CSI Driver with the Azure provider, or External Secrets Operator, for AKS.
+- Variable groups linked to Key Vault only where unavoidable.
+- No secrets in Git (pre-commit and pipeline scanning), and secret-rotation strategy.
+- Distinguishing secrets from config (App Configuration).
+
+*Probe:* "A secret leaked into Git history. Walk me through your response." Expect rotation first, history rewrite second.
+
+**Q9. Explain Kubernetes Deployments, StatefulSets, and DaemonSets. When have you actually chosen each?**
+
+*Strong answer:*
+- Concrete uses: Deployments for stateless APIs, StatefulSets for ordered, stable-identity workloads (Kafka, Elasticsearch), DaemonSets for node agents (log shippers, CSI drivers).
+- StatefulSet volume claim behavior, headless services, and update strategies (`partition` for canary-like rollouts).
+
+*Probe:* "A StatefulSet pod is stuck Terminating after a node failure. What are the risks of force-deleting it?"
+
+**Q10. A Deployment rollout is stuck. How do you diagnose and recover?**
+
+*Strong answer:*
+- `kubectl rollout status/history/undo`; describe the ReplicaSet and pods.
+- Common causes: failing readiness probes, `ImagePullBackOff` (ACR permissions, i.e. AcrPull on the kubelet identity), insufficient resources, PDB or quota conflicts, a bad `maxUnavailable`/`maxSurge` combination.
+- Rollback first, root-cause second, then add automated rollback via progressive delivery.
+
+*Probe:* "Readiness vs. liveness vs. startup probes: which one did you misconfigure that caused an outage?"
+
+**Q11. How do you configure resource requests, limits, and autoscaling for a production service?**
+
+*Strong answer:*
+- Requests based on observed usage (VPA in recommendation mode, Prometheus data).
+- Awareness that CPU limits can cause throttling, and that memory limits cause OOMKills.
+- QoS classes.
+- HPA on CPU/memory vs. custom or external metrics via KEDA (queue depth, Event Hubs, Service Bus).
+- Cluster autoscaler or node auto-provisioning, and why HPA and VPA shouldn't both act on CPU or memory for the same workload.
+
+*Probe:* "HPA scaled pods up but they stay Pending. What's happening?"
+
+---
+
+## Tier 3: Advanced (Architecture, Security, Reliability)
+
+**Q12. Design a production-grade AKS cluster architecture. What decisions do you make up front that are hard to change later?**
+
+*Strong answer:*
+- Networking: Azure CNI Overlay vs. Azure CNI with pod subnets vs. kubenet (retiring), with IP planning and Cilium dataplane for network policy and observability.
+- Private cluster vs. API server VNet integration, and egress control via Azure Firewall/UDR or NAT Gateway.
+- System vs. user node pools, availability zones, and Entra ID integration with Azure RBAC for Kubernetes.
+- OIDC issuer and Workload Identity, managed Prometheus/Grafana, and upgrade channels.
+
+*Probe:* "Why is IP exhaustion the classic AKS networking failure, and how did you size for it?"
+
+**Q13. How do you secure a Kubernetes cluster end to end?**
+
+*Strong answer:*
+- Layered approach: image supply chain (ACR, vulnerability scanning, signing with Notation/cosign, admission verification), runtime (Defender for Containers), and admission control (Azure Policy for Kubernetes/Gatekeeper or Kyverno).
+- Pod Security Standards via Pod Security Admission (PSP is gone), non-root containers, read-only root filesystems, and seccomp.
+- Default-deny NetworkPolicies, minimal RBAC, and no cluster-admin for humans (use PIM/JIT access).
+
+*Probe:* "What do you do about a base-image CVE with no available fix?" Look for risk-based triage, VEX awareness, and compensating controls.
+
+**Q14. Explain your ingress and traffic-management strategy on AKS, including what you'd do given ingress-nginx's retirement.**
+
+*Strong answer:*
+- Awareness that the community ingress-nginx project has been retired, and that the migration path is Gateway API-based options (e.g., the Application Gateway for Containers, Istio/Envoy-based gateways) or the managed application routing add-on where appropriate.
+- Gateway API concepts: GatewayClass, Gateway, HTTPRoute, and role separation between platform and app teams.
+- TLS automation with cert-manager and Key Vault.
+
+*Probe:* "How would you migrate 200 Ingress resources with custom annotations without downtime?" Expect discussion of running both in parallel and shifting traffic at DNS or Front Door.
+
+**Q15. Compare GitOps (Flux/Argo CD) with push-based deployments from Azure Pipelines. When do you use which?**
+
+*Strong answer:*
+- GitOps: a pull model with continuous reconciliation, drift correction, an audit trail in Git, and no cluster credentials in CI.
+- Push: simpler for small setups and for non-Kubernetes targets.
+- A hybrid split: CI builds and tests, then updates an image tag or manifest repo; the GitOps controller deploys.
+- Flux as an AKS extension, and repo structure for multi-cluster (base/overlays, Kustomize or Helm).
+
+*Probe:* "How do you promote a release from staging to production in a GitOps flow, and how do you roll back?"
+
+**Q16. How do you implement progressive delivery (canary, blue-green) on Kubernetes?**
+
+*Strong answer:*
+- Argo Rollouts or Flagger with a service mesh or gateway for traffic splitting.
+- Automated analysis against SLIs (error rate, latency) from Prometheus, with automated abort and rollback.
+- Handling database schema changes with expand/contract migrations.
+
+*Probe:* "What metrics gate your canary, and how did you pick thresholds?"
+
+**Q17. How do you design observability for a microservices platform on Azure?**
+
+*Strong answer:*
+- Metrics, logs, and traces together: Azure Monitor managed Prometheus and Grafana, Container Insights, and OpenTelemetry with Application Insights.
+- Log cost control (Basic Logs tier, data collection rules, sampling).
+- SLO-based alerting (burn rate) instead of noisy threshold alerts, plus runbooks linked from alerts.
+
+*Probe:* "Your Log Analytics bill tripled. How do you investigate?"
+
+**Q18. Describe your disaster recovery and high-availability approach for a critical workload on AKS.**
+
+*Strong answer:*
+- Zone-redundant node pools, PodDisruptionBudgets, topology spread constraints, and multi-region active/active or active/passive with Front Door.
+- Stateful data: geo-replication (Cosmos DB, SQL failover groups, GRS storage) rather than relying on Velero alone.
+- Defined RTO/RPO, tested regularly with game days, and the cluster itself treated as cattle (rebuildable from IaC plus GitOps).
+
+*Probe:* "When did you last actually fail over, and what surprised you?"
+
+**Q19. How do you manage Kubernetes upgrades and node OS patching with minimal risk?**
+
+*Strong answer:*
+- Auto-upgrade channels (patch/stable) for non-prod first, and maintenance windows.
+- Node image upgrade channel, surge settings, and PDBs that don't block drains forever.
+- API deprecation scanning (e.g., Pluto, kubent) before minor upgrades, and test in a lower environment.
+- Supported-version policy awareness.
+
+*Probe:* "An upgrade hung on a PDB. What now?"
+
+---
+
+## Tier 4: Expert (Strategy, Trade-offs, Incident Leadership)
+
+**Q20. Design a multi-tenant internal platform on AKS for 30 product teams. What are your isolation and governance choices?**
+
+*Strong answer:*
+- Namespace-per-team vs. cluster-per-team trade-offs (blast radius vs. cost and ops overhead), with a tiered model.
+- Quotas and LimitRanges, network policies, RBAC groups via Entra, and policy guardrails.
+- Golden-path templates (Backstage or similar), self-service onboarding via IaC and GitOps, and showback/chargeback.
+- Treating the platform as a product with SLAs and feedback loops.
+
+*Probe:* "A noisy-neighbor team is starving others. What structural fix do you apply, not just tactical?"
+
+**Q21. Walk me through a production incident you led. Then tell me what you changed afterward.**
+
+*Strong answer:*
+- A structured account: detection, triage, mitigation before root cause, communication cadence, and a blameless postmortem.
+- Systemic follow-ups (alerts, automation, guardrails) rather than "we told people to be careful."
+- Ownership without blame-shifting.
+
+*Probe:* "What did you get wrong during the incident?" Honest, specific self-assessment is the signal.
+
+**Q22. A pod can't reach a service in another namespace intermittently. Walk me through debugging from DNS to the data plane.**
+
+*Strong answer:*
+- Methodical layering: pod-level test (`kubectl exec`/ephemeral debug containers) → CoreDNS resolution and `ndots` behavior → Service/Endpoints/EndpointSlices → NetworkPolicy → CNI and node-level conntrack or SNAT port exhaustion → NSG/firewall.
+- Distinguishing "always fails" from "intermittent" (DNS timeouts, conntrack races, unhealthy backends).
+
+*Probe:* "What is SNAT port exhaustion and how does it show up in AKS?"
+
+**Q23. How do you embed supply-chain security and compliance into the delivery pipeline without slowing teams down?**
+
+*Strong answer:*
+- Shift-left with fast feedback: SAST/SCA and secret scanning in PRs, container scanning in build, SBOM generation, and provenance/attestations.
+- Signed images verified at admission, and policy-as-code with exceptions handled through a documented process.
+- Metrics (lead time, scan-fail rates) to prove security isn't the bottleneck.
+- Awareness of hardened self-hosted or managed build agents and ephemeral runners.
+
+*Probe:* "Developers are bypassing the gates. Is that a tooling problem or a culture problem?"
+
+**Q24. How do you control cloud cost on AKS and Azure without harming reliability?**
+
+*Strong answer:*
+- Right-sizing from real usage data, spot node pools for tolerant workloads, and reserved instances/savings plans for steady baseline.
+- Bin-packing and node auto-provisioning, scale-to-zero via KEDA, and dev/test schedules.
+- Tag-driven showback, budgets and alerts, and FinOps reviews.
+- Naming the trade-offs (spot eviction, overprovisioning for headroom).
+
+*Probe:* "Which optimization saved the most, and what did it cost you in risk?"
+
+**Q25. Where would you add AI/automation into DevOps workflows, and where would you refuse to?**
+
+*Strong answer:*
+- Sensible uses: log/alert summarization, PR review assistance, runbook drafting, and IaC scaffolding, always with human review.
+- Hard boundaries: no unreviewed changes to production, least-privilege credentials for any agent, audit trails, and data-handling limits.
+- Practical evaluation criteria rather than hype.
+
+*Probe:* "An AI-generated Terraform change looked fine in review but broke networking. What controls would have caught it?"
+
+**Q26. How do you influence engineers and stakeholders who resist a change you believe is right, such as mandatory policy enforcement or a migration deadline?**
+
+*Strong answer:*
+- Understanding the resistance first, and framing changes in terms of the team's own pain or risk.
+- Pilots with willing teams, data and demos over mandates, and paved roads that make the right way the easy way.
+- Escalation only after enablement, and willingness to change their own position when shown evidence.
+
+*Probe:* "Tell me about a time you were wrong and were persuaded otherwise."
+
+---
+
+## Scoring Guidance for Interviewers
+
+| Signal | Strong candidate | Weak candidate |
+|---|---|---|
+| **Depth** | Explains *why* and the trade-offs, cites failures | Lists features and service names |
+| **Specificity** | Names versions, limits, commands, real numbers | Speaks in generalities |
+| **Currency** | Mentions Workload Identity, OIDC federation, Gateway API, GitOps, supply-chain signing | Relies on retired or legacy patterns (kubenet, PSP, pod identity, PAT/secret-based service connections) |
+| **Debugging** | Layered, hypothesis-driven | Random command guessing |
+| **Ownership** | Owns mistakes, describes systemic fixes | Blames tools or teammates |
+| **Communication** | Adjusts explanation for the audience | Jargon-heavy or unable to simplify |
+
+**Suggested interview structure (about 90 minutes):** Pick 2 questions from Tier 2, 2 from Tier 3, and 1-2 from Tier 4. Add Q21 or Q26 for behavioral signal. Use the probes liberally. Candidates who can defend their answers under follow-up are the ones who have actually done the work.
+
+I can also turn this into a Word or PDF handout, add a hands-on lab exercise (for example, a broken AKS manifest to debug live), or tailor it to a specific role such as SRE or platform engineering.
